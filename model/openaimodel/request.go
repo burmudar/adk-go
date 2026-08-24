@@ -15,6 +15,8 @@
 package openaimodel
 
 import (
+	"cmp"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -138,6 +140,12 @@ func convertContents(contents []*genai.Content) (responses.ResponseInputParam, e
 					return nil, err
 				}
 				items = append(items, responses.ResponseInputItemUnionParam{OfFunctionCallOutput: respParam})
+			case part.FileData != nil:
+				param := newFileDataResponseParam(part.FileData)
+				items = append(items, *param)
+			case part.InlineData != nil:
+				param := newInlineDataResponseParam(part.InlineData)
+				items = append(items, *param)
 			default:
 				return nil, fmt.Errorf("openai: unsupported content part %T", part)
 			}
@@ -149,6 +157,74 @@ func convertContents(contents []*genai.Content) (responses.ResponseInputParam, e
 	}
 
 	return items, nil
+}
+
+func newFileDataResponseParam(part *genai.FileData) *responses.ResponseInputItemUnionParam {
+	if strings.HasPrefix("image/", part.MIMEType) {
+		inlineParam := responses.ResponseInputImageParam{}
+		inlineParam.Detail = "auto"
+		inlineParam.ImageURL = param.Opt[string]{
+			Value: part.FileURI,
+		}
+		msg := responses.ResponseInputItemParamOfMessage(
+			responses.ResponseInputMessageContentListParam{
+				{OfInputImage: &inlineParam},
+			},
+			responses.EasyInputMessageRoleUser,
+		)
+		return &msg
+	}
+	inlineParam := responses.ResponseInputFileParam{}
+	inlineParam.Detail = "auto"
+	if strings.HasPrefix("file-", part.MIMEType) {
+		inlineParam.FileID = param.Opt[string]{
+			Value: part.FileURI,
+		}
+	}
+	inlineParam.FileURL = param.Opt[string]{
+		Value: part.FileURI,
+	}
+
+	msg := responses.ResponseInputItemParamOfMessage(
+		responses.ResponseInputMessageContentListParam{
+			{OfInputFile: &inlineParam},
+		},
+		responses.EasyInputMessageRoleUser,
+	)
+	return &msg
+
+}
+
+func newInlineDataResponseParam(part *genai.Blob) *responses.ResponseInputItemUnionParam {
+	mimeType := cmp.Or(part.MIMEType, "application/octet-stream")
+	encoded := base64.StdEncoding.EncodeToString(part.Data)
+	urlEncoded := param.Opt[string]{
+		Value: fmt.Sprintf("data:%s;base64,%s", mimeType, encoded),
+	}
+
+	if strings.HasPrefix(part.MIMEType, "image/") {
+		inlineParam := responses.ResponseInputImageParam{}
+		inlineParam.Detail = "auto"
+		inlineParam.ImageURL = urlEncoded
+		msg := responses.ResponseInputItemParamOfMessage(
+			responses.ResponseInputMessageContentListParam{
+				{OfInputImage: &inlineParam},
+			},
+			responses.EasyInputMessageRoleUser,
+		)
+		return &msg
+	}
+	inlineParam := responses.ResponseInputFileParam{}
+	inlineParam.Filename = param.Opt[string]{Value: cmp.Or(part.DisplayName, "inline_data")}
+	inlineParam.FileData = urlEncoded
+	msg := responses.ResponseInputItemParamOfMessage(
+		responses.ResponseInputMessageContentListParam{
+			{OfInputFile: &inlineParam},
+		},
+		responses.EasyInputMessageRoleUser,
+	)
+	return &msg
+
 }
 
 func newMessage(role genai.Role, texts []string) (*responses.EasyInputMessageParam, error) {
